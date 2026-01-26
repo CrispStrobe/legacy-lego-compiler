@@ -5,13 +5,15 @@ A high-performance, serverless REST API that compiles **NXC (Not eXactly C)** fo
 
 This project integrates the cross-compiled 15-year-old Pascal source code of NBC and the more modern ev3dev Go source of LMSASM into Linux-compatible binaries, hosting them via FastAPI on Vercel.
 
+Demo: https://lego-compiler.vercel.app/
+
 ---
 
 ## 🏗 System Architecture
 
 The project uses a **Pre-built Binary + Serverless Function** architecture to bypass the limitations of cloud environments.
 
-1.  **NBC Compiler**: Compiled from Pascal source using Docker (Target: x86_64-linux).
+1.  **NBC/NXC Compiler**: Compiled from Pascal source using Docker (Target: x86_64-linux).
 2.  **LMSASM Assembler**: Compiled from Go source (Target: x86_64-linux).
 3.  **FastAPI Wrapper**: A Python interface that manages a writable `/tmp` execution environment for the compilers.
 
@@ -63,10 +65,7 @@ We structure the files as follows for Vercel compatibility:
 ### 4. Deploy to Vercel
 
 ```bash
-# Clean up build artifacts to stay under 250MB limit
-rm *.o *.ppu *.rsj
 vercel --prod
-
 ```
 
 ---
@@ -76,7 +75,7 @@ vercel --prod
 ### 1. cURL (NXT/NXC)
 
 ```bash
-curl -X POST [https://your-app.vercel.app/compile](https://your-app.vercel.app/compile) \
+curl -X POST [https://lego-compiler.vercel.app/compile](https://lego-compiler.vercel.app/compile) \
   -H "Content-Type: application/json" \
   -d '{
     "compiler": "nxc",
@@ -92,7 +91,7 @@ import requests
 import base64
 
 def get_rxe(code):
-    url = "[https://your-app.vercel.app/compile](https://your-app.vercel.app/compile)"
+    url = "[https://lego-compiler.vercel.app/compile](https://lego-compiler.vercel.app/compile)"
     payload = {"compiler": "nxc", "code": code}
     res = requests.post(url, json=payload).json()
     if res["success"]:
@@ -105,7 +104,7 @@ def get_rxe(code):
 
 ```javascript
 const compileCode = async (nxcCode) => {
-    const response = await fetch('[https://your-app.vercel.app/compile](https://your-app.vercel.app/compile)', {
+    const response = await fetch('[https://lego-compiler.vercel.app/compile](https://lego-compiler.vercel.app/compile)', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ compiler: 'nxc', code: nxcCode })
