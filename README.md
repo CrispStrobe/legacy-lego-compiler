@@ -1,30 +1,47 @@
+# LEGO Bytecode Compiler API (NXT and EV3)
 
-# 🤖 LEGO Bytecode Compiler API (NXT & EV3)
+A serverless REST API that compiles **NXC (Not eXactly C)** to LEGO NXT `.rxe`
+files and **lmsasm** (LMS Assembly) to LEGO EV3 bytecode.
 
-A high-performance, serverless REST API that compiles **NXC (Not eXactly C)** for LEGO NXT bricks and **LMS Assembly** for LEGO EV3 bricks. 
+It cross-compiles the 15-year-old Pascal NBC compiler and the more modern Go
+[`ev3dev/lmsasm`](https://github.com/ev3dev/lmsasm) assembler into x86_64 Linux
+binaries, then wraps them in FastAPI behind Vercel's serverless functions.
 
-This project integrates the cross-compiled 15-year-old Pascal source code of NBC and the more modern ev3dev Go source of LMSASM into Linux-compatible binaries, hosting them via FastAPI on Vercel.
+**Live API:** <https://lego-compiler.vercel.app/>
 
-Demo: https://lego-compiler.vercel.app/
+## Who calls this
+
+This API is the compile-side of the "transpile to brick bytecode" extensions in
+[`CrispStrobe/turbowarp-lego`](https://github.com/CrispStrobe/turbowarp-lego)
+and [`CrispStrobe/extensions`](https://github.com/CrispStrobe/extensions/tree/main/extensions/CrispStrobe):
+
+- `legonxt_transpile_universal.js` — Scratch → NXC → `.rxe` for NXT
+- `ev3_lms_transpile.js` — Scratch → lmsasm → EV3 bytecode
+
+The browser POSTs the source it generated to `/compile`; the API returns the
+binary as base64; the extension hands it to the brick.
 
 ---
 
-## 🏗 System Architecture
+## Architecture
 
-The project uses a **Pre-built Binary + Serverless Function** architecture to bypass the limitations of cloud environments.
+Pre-built binaries shipped alongside a thin FastAPI wrapper, so each Vercel
+function invocation can `exec()` the compiler against a writable `/tmp`
+workspace.
 
-1.  **NBC/NXC Compiler**: Compiled from Pascal source using Docker (Target: x86_64-linux).
-2.  **LMSASM Assembler**: Compiled from Go source (Target: x86_64-linux).
-3.  **FastAPI Wrapper**: A Python interface that manages a writable `/tmp` execution environment for the compilers.
-
-
+1. **NBC/NXC compiler** — built from Pascal (FPC) inside a Debian container
+   targeting `x86_64-linux`.
+2. **lmsasm assembler** — `go build` cross-compiled to `x86_64-linux`.
+3. **FastAPI wrapper** — copies request body to `/tmp/<uuid>/`, runs the
+   binary, base64-encodes the output, and returns it.
 
 ---
 
-## 🚀 Deployment & Build Steps
+## Deployment / build steps
 
-### 1. Compile NBC for Linux (The Pascal Hurdles)
-Since Vercel runs on Linux x86_64, we used Docker on macOS to produce a compatible binary:
+### 1. Compile NBC for Linux
+
+Since Vercel runs Linux x86_64, build NBC via Docker (macOS host shown):
 ```bash
 docker run --rm --platform linux/amd64 -v $(pwd):/sources debian:stable-slim \
   sh -c "apt-get update && apt-get install -y fpc && cd /sources && \
@@ -37,18 +54,17 @@ docker run --rm --platform linux/amd64 -v $(pwd):/sources debian:stable-slim \
 
 ```
 
-### 2. Compile LMSASM for Linux (The Go Way)
+### 2. Compile lmsasm for Linux
 
-Inside the `ev3dev/lmsasm` repository:
+Inside an [`ev3dev/lmsasm`](https://github.com/ev3dev/lmsasm) checkout:
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -o lmsasm-linux ./lmsasm
-
 ```
 
-### 3. Assemble the Deployment Package
+### 3. Assemble the deployment package
 
-We structure the files as follows for Vercel compatibility:
+Layout Vercel needs:
 
 ```text
 .
@@ -59,7 +75,6 @@ We structure the files as follows for Vercel compatibility:
     ├── nbc-linux      # Compiled in Step 1
     ├── lmsasm-linux   # Compiled in Step 2
     └── nbc_includes/  # Header files (.h) from NBC/NXT source
-
 ```
 
 ### 4. Deploy to Vercel
@@ -70,55 +85,86 @@ vercel --prod
 
 ---
 
-## 📡 API Usage Examples
+## API
 
-### 1. cURL (NXT/NXC)
+### Endpoint
+
+`POST https://lego-compiler.vercel.app/compile`
+
+Request:
+
+```json
+{
+  "compiler": "nxc" | "lmsasm",
+  "code": "<source>"
+}
+```
+
+Response (success):
+
+```json
+{
+  "success": true,
+  "base64": "<base64-encoded .rxe or EV3 bytecode>",
+  "log": "<compiler stdout/stderr>"
+}
+```
+
+Response (failure):
+
+```json
+{
+  "success": false,
+  "log": "<compiler error output>"
+}
+```
+
+### cURL
 
 ```bash
-curl -X POST [https://lego-compiler.vercel.app/compile](https://lego-compiler.vercel.app/compile) \
+curl -X POST https://lego-compiler.vercel.app/compile \
   -H "Content-Type: application/json" \
   -d '{
     "compiler": "nxc",
     "code": "task main() { OnFwd(OUT_A, 75); Wait(1000); Off(OUT_A); }"
   }'
-
 ```
 
-### 2. Python
+### Python
 
 ```python
-import requests
-import base64
+import requests, base64
 
-def get_rxe(code):
-    url = "[https://lego-compiler.vercel.app/compile](https://lego-compiler.vercel.app/compile)"
-    payload = {"compiler": "nxc", "code": code}
-    res = requests.post(url, json=payload).json()
-    if res["success"]:
-        with open("program.rxe", "wb") as f:
-            f.write(base64.b64decode(res["base64"]))
-
+def compile_nxc(code, out="program.rxe"):
+    res = requests.post(
+        "https://lego-compiler.vercel.app/compile",
+        json={"compiler": "nxc", "code": code},
+    ).json()
+    if not res.get("success"):
+        raise RuntimeError(res.get("log", "compile failed"))
+    with open(out, "wb") as f:
+        f.write(base64.b64decode(res["base64"]))
 ```
 
-### 3. JavaScript (TurboWarp/Browser)
+### JavaScript (browser / TurboWarp extension)
 
 ```javascript
-const compileCode = async (nxcCode) => {
-    const response = await fetch('[https://lego-compiler.vercel.app/compile](https://lego-compiler.vercel.app/compile)', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ compiler: 'nxc', code: nxcCode })
-    });
-    const data = await response.json();
-    return data.base64; // Ready for download/upload to brick
-};
-
+async function compileNXC(nxcCode) {
+  const res = await fetch('https://lego-compiler.vercel.app/compile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ compiler: 'nxc', code: nxcCode }),
+  });
+  const data = await res.json();
+  if (!data.success) throw new Error(data.log);
+  return data.base64; // hand to brick
+}
 ```
 
 ---
 
-## ⚖️ Licensing
+## Licensing
 
-* **NBC (Next Byte Codes)**: Released under the [Mozilla Public License (MPL)](https://www.mozilla.org/en-US/MPL/).
-* **LMSASM**: Copyright (c) 2009 The Go Authors & 2016 David Lechner. Released under the [BSD-3-Clause License](https://www.google.com/search?q=https://github.com/ev3dev/lmsasm/blob/master/LICENSE.txt).
-* **This API Wrapper**: MIT, provided as-is for educational use.
+- **NBC (Next Byte Codes)** — [MPL](https://www.mozilla.org/en-US/MPL/).
+- **lmsasm** — © 2009 The Go Authors & 2016 David Lechner. [BSD-3-Clause](https://github.com/ev3dev/lmsasm/blob/master/LICENSE.txt).
+- **This API wrapper** — MIT. Provided as-is for educational use.
