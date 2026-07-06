@@ -12,7 +12,7 @@ binaries, then wraps them in FastAPI behind Vercel's serverless functions.
 ## Who calls this
 
 This API is the compile-side of the "transpile to brick bytecode" extensions in
-[`CrispStrobe/turbowarp-lego`](https://github.com/CrispStrobe/turbowarp-lego)
+[`CrispStrobe/brickwright-lego`](https://github.com/CrispStrobe/brickwright-lego)
 and [`CrispStrobe/extensions`](https://github.com/CrispStrobe/extensions/tree/main/extensions/CrispStrobe):
 
 - `legonxt_transpile_universal.js` — Scratch → NXC → `.rxe` for NXT
