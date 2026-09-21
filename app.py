@@ -99,8 +99,47 @@ async def api_compile(req: CompileReq):
         for p in [src, out]:
             if os.path.exists(p): os.unlink(p)
 
+def deployed():
+    """
+    Which compilers this instance can actually run, measured rather than
+    declared.
+
+    The binaries are fetched into /tmp at cold start (setup_binaries) and a
+    compiler whose binary was never built is simply absent — nqc-linux needs a
+    cross-compile step that the repository documents and does not perform. The
+    /compile endpoint already refuses such a request by name; this exists so
+    the PAGE does not offer it in the first place, and so the info panel does
+    not claim a capability the instance does not have.
+
+    Computed per request, not at import: a cold start may not have finished
+    fetching when the first page is served, and a stale "unavailable" is worse
+    than a slightly slower check.
+    """
+    return {
+        'nxc': os.path.exists(NBC_PATH),
+        'lms': os.path.exists(LMS_PATH),
+        'nqc': os.path.exists(NQC_PATH),
+    }
+
+
+@app.get("/capabilities")
+async def capabilities():
+    """Machine-readable, for a caller that would rather ask than be refused."""
+    have = deployed()
+    return {"compilers": have,
+            "targets": {"nqc": NQC_TARGETS} if have['nqc'] else {}}
+
+
 @app.get("/", response_class=HTMLResponse)
 async def ui():
+    have = deployed()
+    options = "".join(
+        f'<option value="{v}">{label}</option>'
+        for v, label in (("nxc", "NXT (NXC)"), ("lms", "EV3 (LMS)"), ("nqc", "RCX (NQC)"))
+        if have[v])
+    def status(v):
+        return "" if have[v] else (
+            ' <span style="color:#c98b3a">— not deployed on this instance</span>')
     return """
     <!DOCTYPE html>
     <html>
@@ -135,9 +174,9 @@ async def ui():
                 <h2>Project Information</h2>
                 <p>A cloud-based toolchain for compiling LEGO Mindstorms bytecode for legacy bricks.</p>
                 <ul>
-                    <li><b>RCX (NQC) Source:</b> <a href="https://bricxcc.sourceforge.net/nqc/" target="_blank">NQC Compiler</a> (Dave Baum / John Hansen, MPL-2.0)</li>
-                    <li><b>NXT (NXC) Source:</b> <a href="https://bricxcc.sourceforge.net/nbc/" target="_blank">NBC/NXC Compiler</a></li>
-                    <li><b>EV3 (LMS) Assembler:</b> <a href="https://github.com/ev3dev/lmsasm" target="_blank">Lmsasm Go Rewrite</a></li>
+                    <li><b>RCX (NQC) Source:</b> <a href="https://bricxcc.sourceforge.net/nqc/" target="_blank">NQC Compiler</a> (Dave Baum / John Hansen, MPL-2.0)""" + status('nqc') + """</li>
+                    <li><b>NXT (NXC) Source:</b> <a href="https://bricxcc.sourceforge.net/nbc/" target="_blank">NBC/NXC Compiler</a>""" + status('nxc') + """</li>
+                    <li><b>EV3 (LMS) Assembler:</b> <a href="https://github.com/ev3dev/lmsasm" target="_blank">Lmsasm Go Rewrite</a>""" + status('lms') + """</li>
                     <li><b>EV3 Docs:</b> <a href="https://analyticphysics.com/Diversions/Assembly%20Language%20Programming%20for%20LEGO%20Mindstorms%20EV3.htm" target="_blank">LMS Programming Guide</a></li>
                 </ul>
                 <hr style="border:0; border-top:1px solid #444; margin: 20px 0;">
@@ -149,10 +188,7 @@ async def ui():
             <div style="font-size: 1.1rem; font-weight: bold; letter-spacing: 0.5px;">🤖 LEGO CLOUD COMPILER</div>
             <div class="controls">
                 <button class="secondary" onclick="toggleModal()">ⓘ Info</button>
-                <select id="compiler" onchange="updateExample()">
-                    <option value="nxc">NXT (NXC)</option>
-                    <option value="lms">EV3 (LMS)</option>
-                </select>
+                <select id="compiler" onchange="updateExample()">""" + options + """</select>
                 <button onclick="compile()">🔧 Compile & Download</button>
             </div>
         </header>
@@ -163,6 +199,7 @@ async def ui():
             let editor;
             const examples = {
                 nxc: 'task main() {\\n    // NXT: Drive forward and play a tone\\n    OnFwd(OUT_BC, 75);\\n    PlayTone(440, 500);\\n    Wait(2000);\\n    Off(OUT_BC);\\n    TextOut(0, LCD_LINE3, "Build Success!");\\n}',
+                nqc: 'task main() {\\n    // RCX: drive until the touch sensor is pressed, then beep\\n    SetSensor(SENSOR_1, SENSOR_TOUCH);\\n    SetPower(OUT_A, OUT_FULL);\\n    OnFwd(OUT_A);\\n    until (SENSOR_1 == 1);\\n    Off(OUT_A);\\n    PlayTone(440, 50);\\n}',
                 lms: 'vmthread MAIN {\\n    // EV3: Set motor speed on Port A\\n    OUTPUT_SPEED(0, 1, 50)\\n    OUTPUT_START(0, 1)\\n    \\n    // Wait 2 seconds (2000ms)\\n    TIMER_WAIT(2000, 0)\\n    \\n    OUTPUT_STOP(0, 1, 0)\\n}'
             };
 
