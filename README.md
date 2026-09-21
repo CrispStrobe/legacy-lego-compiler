@@ -88,7 +88,21 @@ docker run --rm --platform linux/amd64 -v $(pwd):/sources debian:stable-slim \
 NQC is Dave Baum's and John Hansen's C++ compiler for the RCX family (MPL-2.0).
 It needs `bison` and `flex`, and unlike NBC it needs **no include directory at
 runtime** — its API headers are compiled in, so `bin/nqc-linux` is the whole
-deployment:
+deployment.
+
+**The easy way: let CI build it.** Run the **build nqc-linux** workflow
+(Actions → build nqc-linux → Run workflow). It builds on `ubuntu-latest`,
+*proves the binary compiles a probe program and emits the `RCXI` magic before
+committing it*, and commits `bin/nqc-linux`. The default upstream commit is the
+one `brickwright-lite` builds its in-browser NQC from, so the hosted compiler
+and the browser one are the same compiler.
+
+That exists because the recipe below needs Docker and an amd64 Linux host, and
+the people most likely to need the binary are the ones who have neither — which
+is why `bin/nqc-linux` was missing for as long as it was, and why
+`"compiler": "nqc"` refused every request in the meantime.
+
+**The manual way**, if you would rather build it yourself:
 
 ```bash
 git clone https://github.com/jverne/nqc.git && cd nqc
