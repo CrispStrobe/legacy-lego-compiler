@@ -16,12 +16,22 @@ INC_DIR = os.path.join(SRC_BIN_DIR, "nbc_includes")
 TMP_BIN_DIR = "/tmp/bin"
 LMS_PATH = os.path.join(TMP_BIN_DIR, "lmsasm-linux")
 NBC_PATH = os.path.join(TMP_BIN_DIR, "nbc-linux")
+NQC_PATH = os.path.join(TMP_BIN_DIR, "nqc-linux")
+
+# NQC targets its own brick family. RCX2 is the RCX with firmware 2.0, which is
+# what almost everyone has; RCX is firmware 1.x, and the rest are the other
+# bricks that ran the same bytecode. Validated against this list rather than
+# passed through, because an unknown -T is a compiler error the caller cannot
+# read, and because the value reaches a subprocess argv.
+NQC_TARGETS = ("RCX", "RCX2", "CM", "Scout", "Spy", "Swan")
+NQC_DEFAULT_TARGET = "RCX2"
 
 def setup_binaries():
     if not os.path.exists(TMP_BIN_DIR):
         os.makedirs(TMP_BIN_DIR, exist_ok=True)
-    for src, dest in [(os.path.join(SRC_BIN_DIR, "lmsasm-linux"), LMS_PATH), 
-                      (os.path.join(SRC_BIN_DIR, "nbc-linux"), NBC_PATH)]:
+    for src, dest in [(os.path.join(SRC_BIN_DIR, "lmsasm-linux"), LMS_PATH),
+                      (os.path.join(SRC_BIN_DIR, "nbc-linux"), NBC_PATH),
+                      (os.path.join(SRC_BIN_DIR, "nqc-linux"), NQC_PATH)]:
         if os.path.exists(src) and not os.path.exists(dest):
             shutil.copy2(src, dest)
             os.chmod(dest, os.stat(dest).st_mode | stat.S_IEXEC)
@@ -32,20 +42,53 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 class CompileReq(BaseModel):
     code: str
     compiler: str = "nxc"
+    # NQC only. Ignored by the other compilers, so adding it does not change
+    # any existing caller's request.
+    target: str = NQC_DEFAULT_TARGET
 
 @app.post("/compile")
 async def api_compile(req: CompileReq):
     setup_binaries()
-    is_nxc = req.compiler.lower() == 'nxc'
-    suffix, ext = ('.nxc', '.rxe') if is_nxc else ('.lms', '.rbf')
-    
+
+    # One table instead of a chain of ternaries. The two-way form was fine for
+    # two compilers and stops being readable at three, and the argv shapes
+    # genuinely differ: NBC wants an include directory, lmsasm wants -output,
+    # NQC wants a target and needs no includes at all (its API headers are
+    # compiled in).
+    which = req.compiler.lower()
+    if which == 'nxc':
+        suffix, ext = '.nxc', '.rxe'
+    elif which == 'nqc':
+        suffix, ext = '.nqc', '.rcx'
+    else:
+        suffix, ext = '.lms', '.rbf'
+
+    target = req.target if req.target in NQC_TARGETS else NQC_DEFAULT_TARGET
+
     with tempfile.NamedTemporaryFile(mode='w', suffix=suffix, delete=False) as f:
         f.write(req.code)
         src = f.name
     out = src.replace(suffix, ext)
-    
+
+    # A compiler whose binary is not deployed must say so. Without this the
+    # subprocess raises FileNotFoundError and the caller gets a path it cannot
+    # act on, which reads like a compiler bug rather than a missing build step.
+    needed = {'nxc': NBC_PATH, 'nqc': NQC_PATH}.get(which, LMS_PATH)
+    if not os.path.exists(needed):
+        for p in [src]:
+            if os.path.exists(p):
+                os.unlink(p)
+        return {"success": False,
+                "error": f"the {which} compiler is not deployed on this instance "
+                         f"({os.path.basename(needed)} is missing from bin/)"}
+
     try:
-        cmd = [NBC_PATH, f"-I={INC_DIR}", f"-O={out}", src] if is_nxc else [LMS_PATH, '-output', out, src]
+        if which == 'nxc':
+            cmd = [NBC_PATH, f"-I={INC_DIR}", f"-O={out}", src]
+        elif which == 'nqc':
+            cmd = [NQC_PATH, f"-T{target}", f"-O{out}", src]
+        else:
+            cmd = [LMS_PATH, '-output', out, src]
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
         if res.returncode != 0: raise RuntimeError(res.stdout or res.stderr)
         with open(out, 'rb') as f:
@@ -92,6 +135,7 @@ async def ui():
                 <h2>Project Information</h2>
                 <p>A cloud-based toolchain for compiling LEGO Mindstorms bytecode for legacy bricks.</p>
                 <ul>
+                    <li><b>RCX (NQC) Source:</b> <a href="https://bricxcc.sourceforge.net/nqc/" target="_blank">NQC Compiler</a> (Dave Baum / John Hansen, MPL-2.0)</li>
                     <li><b>NXT (NXC) Source:</b> <a href="https://bricxcc.sourceforge.net/nbc/" target="_blank">NBC/NXC Compiler</a></li>
                     <li><b>EV3 (LMS) Assembler:</b> <a href="https://github.com/ev3dev/lmsasm" target="_blank">Lmsasm Go Rewrite</a></li>
                     <li><b>EV3 Docs:</b> <a href="https://analyticphysics.com/Diversions/Assembly%20Language%20Programming%20for%20LEGO%20Mindstorms%20EV3.htm" target="_blank">LMS Programming Guide</a></li>
