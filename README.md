@@ -1,9 +1,11 @@
-# LEGO Bytecode Compiler API (NXT and EV3)
+# LEGO Bytecode Compiler API (RCX, NXT and EV3)
 
-A serverless REST API that compiles **NXC (Not eXactly C)** to LEGO NXT `.rxe`
-files and **lmsasm** (LMS Assembly) to LEGO EV3 bytecode.
+A serverless REST API that compiles **NQC (Not Quite C)** to LEGO RCX `.rcx`
+images, **NXC (Not eXactly C)** to LEGO NXT `.rxe` files, and **lmsasm** (LMS
+Assembly) to LEGO EV3 bytecode.
 
-It cross-compiles the 15-year-old Pascal NBC compiler and the more modern Go
+It cross-compiles the 27-year-old C++ NQC compiler, the 15-year-old Pascal NBC
+compiler and the more modern Go
 [`ev3dev/lmsasm`](https://github.com/ev3dev/lmsasm) assembler into x86_64 Linux
 binaries, then wraps them in FastAPI behind Vercel's serverless functions.
 
@@ -17,9 +19,36 @@ and [`CrispStrobe/extensions`](https://github.com/CrispStrobe/extensions/tree/ma
 
 - `legonxt_transpile_universal.js` — Scratch → NXC → `.rxe` for NXT
 - `ev3_lms_transpile.js` — Scratch → lmsasm → EV3 bytecode
+- (RCX) — Scratch → NQC → `.rcx`, three generations of brick on one API
 
 The browser POSTs the source it generated to `/compile`; the API returns the
 binary as base64; the extension hands it to the brick.
+
+
+## Request shape
+
+```jsonc
+POST /compile
+{
+  "code": "task main() { OnFwd(OUT_A); Wait(100); Off(OUT_A); }",
+  "compiler": "nqc",      // "nqc" | "nxc" | anything else = lmsasm
+  "target": "RCX2"        // NQC only; ignored by the others
+}
+```
+
+`target` is one of `RCX RCX2 CM Scout Spy Swan` and defaults to `RCX2` — the
+RCX with firmware 2.0, which is what most bricks run. An unrecognised value
+falls back to the default rather than reaching the compiler's argv.
+
+The target is not decoration: it changes the emitted image. The same source
+built for `RCX` and `RCX2` differs at the `fTargetType` byte of the `RCXI`
+header. Note also that a program written against the RCX sensor API will
+legitimately FAIL to build for `Scout`, which has a different API — that is the
+target being honoured, not a bug.
+
+A compiler whose binary is not present in `bin/` returns a named refusal rather
+than a subprocess error, so "not deployed" is distinguishable from "your code
+does not compile".
 
 ---
 
@@ -54,6 +83,25 @@ docker run --rm --platform linux/amd64 -v $(pwd):/sources debian:stable-slim \
 
 ```
 
+### 1b. Compile NQC for Linux
+
+NQC is Dave Baum's and John Hansen's C++ compiler for the RCX family (MPL-2.0).
+It needs `bison` and `flex`, and unlike NBC it needs **no include directory at
+runtime** — its API headers are compiled in, so `bin/nqc-linux` is the whole
+deployment:
+
+```bash
+git clone https://github.com/jverne/nqc.git && cd nqc
+docker run --rm --platform linux/amd64 -v "$(pwd)":/src debian:stable-slim \
+  sh -c "apt-get update && apt-get install -y build-essential bison flex && \
+         cd /src && make clean && make"
+cp bin/nqc /path/to/legacy-lego-compiler/bin/nqc-linux
+```
+
+The Linux build takes the `USBOBJ = RCX_USBTowerPipe_none` branch of NQC's
+Makefile, so the binary has no USB or serial dependencies — which is what you
+want on a compile-only server that never touches a tower.
+
 ### 2. Compile lmsasm for Linux
 
 Inside an [`ev3dev/lmsasm`](https://github.com/ev3dev/lmsasm) checkout:
@@ -73,6 +121,7 @@ Layout Vercel needs:
 ├── requirements.txt   # FastAPI, Uvicorn, Pydantic
 └── bin/
     ├── nbc-linux      # Compiled in Step 1
+    ├── nqc-linux      # Compiled in Step 1b
     ├── lmsasm-linux   # Compiled in Step 2
     └── nbc_includes/  # Header files (.h) from NBC/NXT source
 ```
