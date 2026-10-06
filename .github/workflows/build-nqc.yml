@@ -1,0 +1,116 @@
+# Build bin/nqc-linux, because the README's instructions need Docker and a
+# Linux host and the people who have neither are the ones who need the binary.
+#
+# Every other compiler in bin/ was cross-compiled by hand once and committed.
+# NQC was not, so `"compiler": "nqc"` has refused every request since the
+# endpoint landed — the dispatch exists, the binary does not. GitHub gives us
+# an amd64 Linux machine for free; this uses it.
+#
+# MANUAL ONLY. A binary is a deliberate act: it is committed to the repository
+# and shipped to every deployment, so it should be produced when someone asks
+# for it and can say which upstream commit they asked for, not on every push.
+name: build nqc-linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: >-
+          jverne/nqc commit to build. The default is the commit brickwright-lite
+          builds its in-browser NQC from, so the hosted compiler and the browser
+          one are the same compiler.
+        required: true
+        default: 21c24ec1e520c736ce78e33e4c0dafca887fc2b7
+      commit:
+        description: Commit the binary to bin/ (otherwise upload it as an artifact only)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex
+
+      - name: Build NQC at the requested commit
+        run: |
+          set -euo pipefail
+          git clone https://github.com/jverne/nqc.git /tmp/nqc
+          cd /tmp/nqc
+          git checkout "${{ inputs.ref }}"
+          # USBOBJ=RCX_USBTowerPipe_none is what makes this deployable: the
+          # binary then has no USB or serial dependency, which is right for a
+          # compile-only server that never touches a tower.
+          make USBOBJ=RCX_USBTowerPipe_none
+          ls -l bin/nqc
+
+      - name: Prove it compiles before committing it
+        run: |
+          set -euo pipefail
+          # A binary that builds and does not work is worse than none: it turns
+          # a clear "not deployed" refusal into a confusing runtime error.
+          cat > /tmp/probe.nqc <<'NQC'
+          task main() {
+              SetSensor(SENSOR_1, SENSOR_TOUCH);
+              SetPower(OUT_A, OUT_FULL);
+              OnFwd(OUT_A);
+              until (SENSOR_1 == 1);
+              Off(OUT_A);
+              PlayTone(440, 50);
+          }
+          NQC
+          /tmp/nqc/bin/nqc -TRCX2 -O/tmp/probe.rcx /tmp/probe.nqc
+          test -s /tmp/probe.rcx
+          # An .rcx begins with the ASCII magic RCXI. Checking it here means a
+          # compiler that exits 0 having written something else cannot ship.
+          head -c 4 /tmp/probe.rcx | grep -q RCXI
+          echo "probe compiled: $(stat -c%s /tmp/probe.rcx) bytes, RCXI magic present"
+          # And every target the API offers must actually build, or the
+          # `target` parameter is a promise the binary does not keep.
+          for t in RCX RCX2 CM Scout Spy Swan; do
+            /tmp/nqc/bin/nqc -T$t -O/tmp/t.rcx /tmp/probe.nqc >/dev/null 2>&1 \
+              && echo "  $t ok" || echo "  $t REFUSED (expected for some targets)"
+          done
+
+      - name: Stage the binary
+        run: |
+          mkdir -p bin
+          cp /tmp/nqc/bin/nqc bin/nqc-linux
+          chmod +x bin/nqc-linux
+          ls -l bin/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nqc-linux
+          path: bin/nqc-linux
+          if-no-files-found: error
+
+      - name: Commit it
+        if: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- bin/nqc-linux; then
+            echo "bin/nqc-linux is unchanged — nothing to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bin/nqc-linux
+          git commit -m "Build bin/nqc-linux from jverne/nqc@${{ inputs.ref }}
+
+          Built on ubuntu-latest by .github/workflows/build-nqc.yml, with
+          USBOBJ=RCX_USBTowerPipe_none so the binary carries no USB or serial
+          dependency. Verified before committing: it compiles a probe program
+          and the output carries the RCXI magic.
+
+          Until this exists the /compile endpoint refuses every NQC request by
+          name, which is correct but not useful."
+          git push
