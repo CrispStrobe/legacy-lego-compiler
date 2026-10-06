@@ -115,6 +115,10 @@ def deployed():
     fetching when the first page is served, and a stale "unavailable" is worse
     than a slightly slower check.
     """
+    # Stage the binaries first: on a cold instance the page is served before
+    # any /compile has run setup_binaries(), and without this the selector
+    # would offer nothing at all.
+    setup_binaries()
     return {
         'nxc': os.path.exists(NBC_PATH),
         'lms': os.path.exists(LMS_PATH),
