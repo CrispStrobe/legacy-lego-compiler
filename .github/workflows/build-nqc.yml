@@ -49,8 +49,15 @@ jobs:
           # USBOBJ=RCX_USBTowerPipe_none is what makes this deployable: the
           # binary then has no USB or serial dependency, which is right for a
           # compile-only server that never touches a tower.
-          make USBOBJ=RCX_USBTowerPipe_none
+          #
+          # LIBS adds -static: ubuntu-latest's glibc is newer than the one the
+          # Vercel Python runtime ships, so a dynamic binary built here can fail
+          # there with "GLIBC_2.xx not found". nbc-linux and lmsasm-linux are
+          # static for the same reason.
+          make USBOBJ=RCX_USBTowerPipe_none LIBS="-static -lstdc++"
           ls -l bin/nqc
+          file bin/nqc
+          file bin/nqc | grep -q 'statically linked'
 
       - name: Prove it compiles before committing it
         run: |
@@ -97,13 +104,16 @@ jobs:
         if: ${{ inputs.commit }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- bin/nqc-linux; then
+          # Stage first: `git diff` ignores untracked files, so on the first
+          # build (no bin/nqc-linux in the tree yet) an unstaged diff reports
+          # "unchanged" and the binary would never be committed.
+          git add bin/nqc-linux
+          if git diff --cached --quiet -- bin/nqc-linux; then
             echo "bin/nqc-linux is unchanged — nothing to commit"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add bin/nqc-linux
           git commit -m "Build bin/nqc-linux from jverne/nqc@${{ inputs.ref }}
 
           Built on ubuntu-latest by .github/workflows/build-nqc.yml, with
