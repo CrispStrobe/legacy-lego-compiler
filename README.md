@@ -142,6 +142,13 @@ Layout Vercel needs:
 
 ### 4. Deploy to Vercel
 
+The Vercel project is connected to this repository: a merge to `main` deploys
+production, and a push to any other branch builds a preview deployment.
+Nothing needs to be run by hand. A binary added to `bin/` (for example by the
+**build nqc-linux** workflow, which commits to `main`) goes live the same way.
+
+To deploy from a local checkout without going through GitHub:
+
 ```bash
 vercel --prod
 ```
